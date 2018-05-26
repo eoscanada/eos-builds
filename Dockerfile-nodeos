@@ -1,0 +1,39 @@
+FROM gcr.io/eoscanada-testnets/eosio-build-env:v6 as builder
+
+ENV EOSIO_BRANCH dawn-v4.2.0
+ENV EOSIO_REPOSITORY https://github.com/EOSIO/eos.git
+
+RUN git clone -b $EOSIO_BRANCH --depth 1 $EOSIO_REPOSITORY --recursive \
+    && git clone -b master --depth 1 https://github.com/eoscanada/eos-bios \
+    && cd eos \
+    && cp -arv ../eos-bios/eosio.disco ./contracts \
+    && cp -arv ../eos-bios/eosio.unregd ./contracts \
+    && echo "add_subdirectory(eosio.disco)" >> ./contracts/CMakeLists.txt \
+    && echo "add_subdirectory(eosio.unregd)" >> ./contracts/CMakeLists.txt \
+    && echo "add_dependencies(txn_test_gen_plugin eosio.token)" >> ./plugins/txn_test_gen_plugin/CMakeLists.txt \
+    && cmake -H. -B"/tmp/build" -GNinja \
+       -DCORE_SYMBOL_NAME=EOS \
+       -DWASM_ROOT=/opt/wasm \
+       -DCMAKE_BUILD_TYPE=Release \
+       -DCMAKE_CXX_COMPILER=clang++ \
+       -DCMAKE_C_COMPILER=clang \
+       -DCMAKE_INSTALL_PREFIX=/opt/eos \
+       -DSecp256k1_ROOT_DIR=/usr/local \
+       -DEOS_LIBMONGOCXX=/usr/local \
+       -DEOS_LIBBSONCXX=/usr/local \
+    && cp --remove-destination `readlink /usr/lib/x86_64-linux-gnu/libz.so` /usr/lib/x86_64-linux-gnu/libz.so \
+    && cp --remove-destination `readlink /usr/lib/x86_64-linux-gnu/libbz2.so` /usr/lib/x86_64-linux-gnu/libbz2.so \
+    && cmake --build /tmp/build --target install
+
+
+FROM launcher.gcr.io/google/ubuntu16_04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install openssl less && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/lib/* /usr/local/lib/
+COPY --from=builder /opt/eos/bin /opt/eosio/bin
+COPY --from=builder /tmp/build/contracts /contracts
+COPY --from=builder /eos/Docker/nodeosd.sh /opt/eosio/bin/nodeosd.sh
+RUN chmod +x /opt/eosio/bin/nodeosd.sh
+ENV LD_LIBRARY_PATH /usr/local/lib
+ENV EOSIO_ROOT=/opt/eosio
+VOLUME /opt/eosio/bin/data-dir
+ENV PATH /opt/eosio/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
